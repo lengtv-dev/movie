@@ -1,4 +1,4 @@
-name = "m3u8proxy"
+name = "movie"
 main = "src/index.ts"
 compatibility_date = "2023-03-12"
 compatibility_flags = ["nodejs_compat"]
