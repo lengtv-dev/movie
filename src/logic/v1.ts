@@ -1,55 +1,64 @@
+export const M3u8ProxyV1 = async (request: Request) => {
+  const reqUrl = new URL(request.url);
 
-
-export const M3u8ProxyV1 = async (request: Request<unknown>) => {
-  const url = new URL(request.url);
-  const refererUrl = decodeURIComponent(url.searchParams.get("referer") || "");
-  const targetUrl = decodeURIComponent(url.searchParams.get("url") || "");
-  const originUrl = decodeURIComponent(url.searchParams.get("origin") || "");
-  const proxyAll = decodeURIComponent(url.searchParams.get("all") || "");
-
+  const targetUrl = reqUrl.searchParams.get("url");
   if (!targetUrl) {
-    return new Response("Invalid URL", { status: 400 });
+    return new Response("Missing url", { status: 400 });
   }
 
-  const response = await fetch(targetUrl, {
+  const referer = reqUrl.searchParams.get("referer") || "https://doofree789.com";
+  const originHdr = reqUrl.searchParams.get("origin") || "";
+  const proxyAll = reqUrl.searchParams.get("all") === "yes";
+
+  const upstream = await fetch(targetUrl, {
     headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-      Referer: refererUrl || "",
-      Origin: originUrl || "",
+      Referer: referer,
+      ...(originHdr && { Origin: originHdr }),
     },
   });
 
-  let modifiedM3u8;
-  if (targetUrl.includes(".m3u8")) {
-    modifiedM3u8 = await response.text();
-    const targetUrlTrimmed = `${encodeURIComponent(
-      targetUrl.replace(/([^/]+\.m3u8)$/, "").trim()
-    )}`;
-    const encodedUrl = encodeURIComponent(refererUrl);
-    const encodedOrigin = encodeURIComponent(originUrl);
-    modifiedM3u8 = modifiedM3u8.split("\n").map((line) => {
-      if (line.startsWith("#") || line.trim() == '') {
-        return line;
-      }
-      else if(proxyAll == 'yes' && line.startsWith('http')){ //https://yourproxy.com/?url=https://somevideo.m3u8&all=yes
-        return `${url.origin}?url=${line}`;
-      }
-      return `?url=${targetUrlTrimmed}${line}${originUrl ? `&origin=${encodedOrigin}` : ""
-      }${refererUrl ? `&referer=${encodedUrl}` : ""
-      }`;
-    }).join("\n");
+  const contentType = upstream.headers.get("content-type") || "";
+  const isM3U8 =
+    contentType.includes("mpegurl") ||
+    targetUrl.includes(".m3u8");
+
+  // ===================== M3U8 =====================
+  if (isM3U8) {
+    const body = await upstream.text();
+    const baseUrl = new URL(targetUrl);
+
+    const rewritten = body
+      .split("\n")
+      .map(line => {
+        const l = line.trim();
+
+        // comment / empty
+        if (!l || l.startsWith("#")) return line;
+
+        // resolve relative & special cases เช่น chunks.m3u8/8
+        const resolvedUrl = new URL(l, baseUrl).toString();
+
+        return `${reqUrl.origin}?url=${encodeURIComponent(resolvedUrl)}`
+          + `&referer=${encodeURIComponent(referer)}`
+          + (originHdr ? `&origin=${encodeURIComponent(originHdr)}` : "")
+          + (proxyAll ? `&all=yes` : "");
+      })
+      .join("\n");
+
+    return new Response(rewritten, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "application/vnd.apple.mpegurl",
+      },
+    });
   }
 
-  return new Response(modifiedM3u8 || response.body, {
-    status: response.status,
-    statusText: response.statusText,
+  // ===================== SEGMENT (.ts / .aac / .key / m3u8/8) =====================
+  return new Response(upstream.body, {
+    status: upstream.status,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Content-Type":
-        response.headers?.get("Content-Type") ||
-        "application/vnd.apple.mpegurl",
+      "Content-Type": contentType || "application/octet-stream",
     },
   });
-}
+};
